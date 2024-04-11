@@ -45,7 +45,6 @@ int main()
 
     dim3 block(16, 16);
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-
     imageToGrayscale << <grid, block >> > (gpu_image, width, height, channels);
 
     cudaMemcpy(image, gpu_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost);
