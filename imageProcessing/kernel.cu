@@ -120,10 +120,6 @@ int main()
     dim3 block(BLOCK, BLOCK); // 16x16 block
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y); // grid dimensions based on the image size and block size (rounded down)
 
-     imageToGrayscale << <grid, block >> > (gpu_image, out_image, width, height, channels);
-     assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
-     stbi_write_jpg("img_gray.jpg", width, height, channels, image, 100);
-
     blurImage << <grid, block >> > (gpu_image, out_image, width, height, channels);
     assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
     stbi_write_jpg("img_blur.jpg", width, height, channels, image, 100);
