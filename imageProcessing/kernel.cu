@@ -4,8 +4,13 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-#include <iostream>
 #include <cmath>
+#include <vector>
+#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <omp.h>
+
 
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h" 
@@ -57,18 +62,13 @@ __global__ void rotateImage(const IMG image, IMG out_image, int width, int heigh
     if (x < width && y < height) {
         int idx = (y * width + x) * channels;
         int new_idx = 0;
-        if (random % 3 == 0) {
+        if (random % 2) { // rotate 90 degrees
             new_idx = (x * height + (height - y - 1)) * channels;
         }
-        else if (random % 3 == 1) {
+        else{ // rotate -90 degrees
             new_idx = ((width - x - 1) * height + y) * channels;
         }
-        else if (random % 3 == 2) {
-            new_idx = ((height - y - 1) * width + (width - x - 1)) * channels;
-        }
-        else {
-            new_idx = (y * width + x) * channels;
-        }
+
         out_image[new_idx] = image[idx];
         out_image[new_idx + 1] = image[idx + 1];
         out_image[new_idx + 2] = image[idx + 2];
@@ -183,50 +183,103 @@ IMG readImageFromFile(const std::string& filename, int *width, int *height, int 
         throw std::runtime_error(stbi_failure_reason());
     }
     if (*width % 32 != 0 || *height % 32 != 0) {
-        throw std::runtime_error("Image dimensions must be multiples of 32");
+        /*throw std::runtime_error("Image dimensions must be multiples of 32");*/
+        // Resize the image to be multiples of 32
+        int new_width = *width - *width % 32;
+        int new_height = *height - *height % 32;
+        int new_size = new_width * new_height * *channels;
+        unsigned char* new_image = new unsigned char[new_size];
+        for (int i = 0; i < new_height; i++) {
+			for (int j = 0; j < new_width; j++) {
+				for (int c = 0; c < *channels; c++) {
+					new_image[(i * new_width + j) * *channels + c] = image[(i * *width + j) * *channels + c];
+				}
+			}
+		}
+        *width = new_width;
+		*height = new_height;
+		stbi_image_free(image);
+		return new_image;
     }
     return image;
 }
+#include <windows.h>
 
+void read_directory(const std::string& name, std::vector<std::string>& v)
+{
+    std::string pattern(name);
+    pattern.append("\\*");
+    WIN32_FIND_DATA data;
+    HANDLE hFind;
+    if ((hFind = FindFirstFile(pattern.c_str(), &data)) != INVALID_HANDLE_VALUE) {
+        do {
+            v.push_back(data.cFileName);
+        } while (FindNextFile(hFind, &data) != 0);
+        FindClose(hFind);
+    }
+}
 
 int main()
 {
     srand(time(NULL));
-    int width, height, channels;
-    IMG image = readImageFromFile("img.jpg", &width, &height, &channels);
+    std::string dir = ".\\imgs";
+    std::string dest = ".\\out\\";
+    std::vector<std::string> v;
+    // read all images in the directory imgs with dir command
+    read_directory(dir, v);
 
-    IMG gpu_image, out_image;
-    assertCudaSuccess(cudaMalloc(&gpu_image, width * height * channels * sizeof(unsigned char)));
-    assertCudaSuccess(cudaMalloc(&out_image, width * height * channels * sizeof(unsigned char)));
+    // start time omp parallel
+    auto start = omp_get_wtime();
 
-    assertCudaSuccess(cudaMemcpy(gpu_image, image, width * height * channels * sizeof(unsigned char), cudaMemcpyHostToDevice));
+        for (int i = 0; i<v.size(); i++) {
+            int width, height, channels;
 
-    dim3 block(BLOCK, BLOCK); // 16x16 block
-    dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y); // grid dimensions based on the image size and block size (rounded down)
+            std::string img = v[i];
+            if (img == "." || img == "..") continue;
 
-    blurImage << <grid, block >> > (gpu_image, out_image, width, height, channels);
-    assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
-    stbi_write_jpg("img_blur.jpg", width, height, channels, image, 100);
+            IMG image = readImageFromFile(dir + "\\" + img, &width, &height, &channels);
 
-    rotateImage << <grid, block >> > (gpu_image, out_image, width, height, channels, rand()*1000);
-    assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
-    stbi_write_jpg("img_rotated.jpg", height, width, channels, image, 100);
 
-    negativeImage << <grid, block >> > (gpu_image, out_image, width, height, channels);
-    assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
-    stbi_write_jpg("img_negative.jpg", width, height, channels, image, 100);
 
-    edgeDetection << <grid, block >> > (gpu_image, out_image, width, height, channels);
-    assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
-    stbi_write_jpg("img_edges.jpg", width, height, channels, image, 100);
+            IMG gpu_image, out_image;
+            assertCudaSuccess(cudaMalloc(&gpu_image, width * height * channels * sizeof(unsigned char)));
+            assertCudaSuccess(cudaMalloc(&out_image, width * height * channels * sizeof(unsigned char)));
 
-    pixelation << <grid, block >> > (gpu_image, out_image, width, height, channels);
-    assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
-    stbi_write_jpg("img_pixelization.jpg", width, height, channels, image, 100);
+            assertCudaSuccess(cudaMemcpy(gpu_image, image, width * height * channels * sizeof(unsigned char), cudaMemcpyHostToDevice));
 
-    //// Free memory
-    stbi_image_free(image);
-    cudaFree(gpu_image);
+            dim3 block(BLOCK, BLOCK); // 16x16 block
+            dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y); // grid dimensions based on the image size and block size (rounded down)
+
+            blurImage << <grid, block >> > (gpu_image, out_image, width, height, channels);
+            assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+            stbi_write_jpg((dest + "blur_" + img).c_str(), width, height, channels, image, 100);
+
+            rotateImage << <grid, block >> > (gpu_image, out_image, width, height, channels, rand() * 1000);
+            assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+            stbi_write_jpg((dest + "rotated_" + img).c_str(), height, width, channels, image, 100);
+
+            negativeImage << <grid, block >> > (gpu_image, out_image, width, height, channels);
+            assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+            stbi_write_jpg((dest + "negative_" + img).c_str(), width, height, channels, image, 100);
+
+            edgeDetection << <grid, block >> > (gpu_image, out_image, width, height, channels);
+            assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+            stbi_write_jpg((dest + "edges_" + img).c_str(), width, height, channels, image, 100);
+
+            pixelation << <grid, block >> > (gpu_image, out_image, width, height, channels);
+            assertCudaSuccess(cudaMemcpy(image, out_image, width * height * channels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+            stbi_write_jpg((dest + "pixelization_" + img).c_str(), width, height, channels, image, 100);
+
+            //// Free memory
+            stbi_image_free(image);
+            cudaFree(gpu_image);
+            cudaFree(out_image);
+    }
+
+    // end time omp parallel
+    auto end = omp_get_wtime();
+    std::cout << "Time: " << end - start << "s" << std::endl;
+
 
 
 

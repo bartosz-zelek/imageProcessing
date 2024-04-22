@@ -57,7 +57,12 @@
     </Link>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
+      <Defines>%(Defines)</Defines>
+      <AdditionalCompilerOptions>"/EHsc /W3 /nologo /Od /Fdx64\Debug\vc143.pdb /FS /Zi /RTC1 /MDd /openmp"</AdditionalCompilerOptions>
     </CudaCompile>
+    <CudaLink>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
+    </CudaLink>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
